@@ -1,0 +1,767 @@
+# Load Required Libraries
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import GridSearchCV
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.metrics import adjusted_rand_score
+from sklearn.metrics import accuracy_score, classification_report, precision_score, confusion_matrix, recall_score, f1_score, roc_auc_score, roc_curve, auc
+
+# Set the working directory to the dataset path
+data = pd.read_csv('/Users/amnazahid/Documents/UKFinancialData.csv')
+
+# Explore the dataset
+data.head()
+data.info()
+data.describe()
+
+# Display number of columns and rows in dataset
+print(f"Shape of dataset: {data.shape}")
+
+# EDA
+
+# Handling missing values (if any)
+data = data.dropna()
+# Handle missing values (replace ' ?' with NaN)
+data.replace(' ?', pd.NA, inplace=True)
+# Check for missing values
+print("\nMissing values in the dataset:")
+print(data.isnull().sum())
+
+# Select features for analysis
+features = ['fraud_bool', 'income', 'name_email_similarity', 'prev_address_months_count',
+            'current_address_months_count', 'customer_age', 'days_since_request',
+            'intended_balcon_amount', 'payment_type', 'zip_count_4w', 'velocity_6h',
+            'velocity_24h', 'velocity_4w', 'bank_branch_count_8w', 'date_of_birth_distinct_emails_4w',
+            'employment_status', 'credit_risk_score', 'housing_status',
+            'phone_home_valid', 'phone_mobile_valid', 'bank_months_count', 'has_other_cards',
+            'proposed_credit_limit', 'foreign_request', 'source', 'session_length_in_minutes',
+            'device_os', 'device_distinct_emails_8w', 'device_fraud_count', 'month']
+# Filter data with selected features
+data_filtered = data[features]
+
+# Scatter Plot for Credit Risk Score and Fraud Bool
+plt.figure(figsize=(8, 4))
+sns.scatterplot(x='fraud_bool', y='credit_risk_score', data=data)
+plt.title('Scatterplot of Fraud Bool vs Credit Risk Score')
+plt.xlabel('Fraud')
+plt.ylabel('Credit Risk Score')
+plt.show()
+
+# Function to identify and handle outliers using the IQR method
+def remove_outliers_iqr(df, column):
+    Q1 = df[column].quantile(0.25)
+    Q3 = df[column].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    return df[(df[column] >= lower_bound) & (df[column] <= upper_bound)]
+
+# Identify and remove outliers for each numerical column
+for col in data_filtered.select_dtypes(include=['float64', 'int64']).columns:
+    data_filtered = remove_outliers_iqr(data_filtered, col)
+
+# Standardize categorical variables (strip any leading/trailing spaces)
+categorical_columns = data.select_dtypes(include=['object']).columns
+data[categorical_columns] = data[categorical_columns].apply(lambda x: x.str.strip())
+
+# Identify non-numeric columns
+non_numeric_columns = data.select_dtypes(include=['object']).columns
+print("Non-numeric columns:", non_numeric_columns)
+
+# Handle non-numeric values
+# For simplicity, we'll convert categorical variables to numeric using label encoding
+label_encoders = {}
+# Encode non-numeric columns
+for col in non_numeric_columns:
+    le = LabelEncoder()
+    data[col] = le.fit_transform(data[col].astype(str))
+    label_encoders[col] = le
+
+# Fill any remaining NaN values with the median of each column
+data = data.apply(lambda x: x.fillna(x.median()), axis=0)
+
+# Ensure 'fraud_bool' is of integer type
+data['fraud_bool'] = data['fraud_bool'].astype(int)
+
+# Distribution of the target variable (fraud vs non-fraud)
+sns.countplot(x='fraud_bool', data=data)
+plt.title('Distribution of Fraudulent and Non-Fraudulent Transactions')
+plt.xlabel('Fraud (0: Non-Fraudulent, 1: Fraudulent)')
+plt.ylabel('Count')
+plt.show()
+
+# Separate numerical and categorical columns
+numerical_columns = data_filtered.select_dtypes(include=['float64', 'int64']).columns
+categorical_columns = data_filtered.select_dtypes(include=['object', 'category', 'bool', 'int']).columns
+
+# Univariate Analysis: Distribution of each feature
+plt.figure(figsize=(20, 15))
+for i, column in enumerate(data.columns):
+    plt.subplot(8, 4, i + 1)
+    if data[column].dtype == 'object':
+        data[column].value_counts().plot(kind='bar', title=column)
+    else:
+        data[column].hist(bins=30)
+        plt.title(column)
+plt.tight_layout()
+plt.show()
+
+# Plot numerical columns
+plt.figure(figsize=(20, 15))
+for i, col in enumerate(numerical_columns):
+    plt.subplot(5, 6, i + 1)
+    sns.histplot(data_filtered[col], bins=30, kde=True)
+    plt.title(col)
+
+plt.tight_layout()
+plt.show()
+
+# Bivariate Analysis: Relationship between features and fraud_bool
+plt.figure(figsize=(20, 15))
+for i, column in enumerate(data.columns):
+    if column != 'fraud_bool':
+        plt.subplot(8, 4, i + 1)
+        if data[column].dtype == 'object':
+            sns.countplot(x=column, hue='fraud_bool', data=data)
+        else:
+            sns.boxplot(x='fraud_bool', y=column, data=data)
+        plt.title(f'Fraud vs {column}')
+plt.tight_layout()
+plt.show()
+
+# Correlation heatmap
+plt.figure(figsize=(30, 15))
+corr = data.corr()
+sns.heatmap(corr, annot=True, cmap='coolwarm')
+plt.title('Correlation Heatmap')
+plt.show()
+
+# Pair plot for a subset of features
+sampled_data = data.sample(n=5000)  # Sampling for better visualization performance
+sns.pairplot(sampled_data, hue='fraud_bool', diag_kind='kde',
+             vars=['income', 'name_email_similarity', 'customer_age', 'credit_risk_score'])
+plt.show()
+
+# Compute the correlation matrix
+correlation_matrix = data.corr()
+# Correlation with 'fraud_bool'
+correlation_with_fraud_bool = correlation_matrix['fraud_bool'].sort_values(ascending=False)
+print(correlation_with_fraud_bool)
+
+# Count plot for categorical features vs fraud_bool
+categorical_cols_encoded = [col for col in data.columns if 'payment_type' in col or 'employment_status' in col or 'housing_status' in col or 'source' in col or 'device_os' in col]
+
+plt.figure(figsize=(20, 15))
+for i, column in enumerate(categorical_cols_encoded):
+    plt.subplot(8, 4, i + 1)
+    sns.countplot(x=column, hue='fraud_bool', data=data)
+    plt.title(f'Fraud vs {column}')
+plt.tight_layout()
+plt.show()
+
+# Violin plots for continuous features vs fraud_bool
+continuous_cols = ['income', 'name_email_similarity', 'customer_age', 'credit_risk_score', 'velocity_6h', 'velocity_24h', 'velocity_4w']
+
+plt.figure(figsize=(20, 15))
+for i, column in enumerate(continuous_cols):
+    plt.subplot(8, 4, i + 1)
+    sns.violinplot(x='fraud_bool', y=column, data=data)
+    plt.title(f'Fraud vs {column}')
+plt.tight_layout()
+plt.show()
+
+# Plot categorical columns in batches of 20 to avoid the subplot limit
+batch_size = 20
+num_batches = len(categorical_columns) // batch_size + 1
+
+for batch_num in range(num_batches):
+    plt.figure(figsize=(20, 15))
+    start_index = batch_num * batch_size
+    end_index = start_index + batch_size
+    for i, col in enumerate(categorical_columns[start_index:end_index]):
+        plt.subplot(4, 5, i + 1)
+        sns.countplot(x=data_filtered[col], palette='Set2')
+        plt.title(col)
+
+    plt.tight_layout()
+    plt.show()
+
+# Fraud vs Customer Ages - Violin Plot
+plt.figure(figsize=(12, 6))
+sns.violinplot(x='fraud_bool', y='customer_age', data=data)
+plt.title('Fraud vs Customer Ages')
+plt.xlabel('Fraud (0: No, 1: Yes)')
+plt.ylabel('Customer Age')
+plt.show()
+
+# Check the number of observations
+num_observations = data.shape[0]
+
+# Ensure the dataset has at least 100000 observations
+if num_observations >= 100000:
+    # Take the first 100000 observations
+    subset_data = data.head(100000)
+    
+    # Save the subset to a new CSV file
+    subset_file_path = ('/Users/amnazahid/Documents/UKFinancialData_encoded.csv')
+    subset_data.to_csv(subset_file_path, index=False)
+    print(f"Subset of 100000 observations saved to {subset_file_path}")
+
+# Splitting the dataset into features and target variable
+X = data.drop('fraud_bool', axis=1)  
+y = data['fraud_bool']
+
+# Standardize the features
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
+
+# Machine Learning Models 
+
+# Random Forest 
+
+# Develop the basic Random Forest model
+rf_model = RandomForestClassifier(random_state=42)
+rf_model.fit(X_train, y_train)
+
+# Make predictions
+y_pred = rf_model.predict(X_test)
+y_pred_proba = rf_model.predict_proba(X_test)[:, 1]
+
+# Evaluate the model
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+class_report = classification_report(y_test, y_pred)
+
+# Print the evaluation metrics
+print(f'Accuracy: {accuracy}')
+print(f'Precision: {precision}')
+print(f'Recall: {recall}')
+print(f'F1 Score: {f1}')
+print("\nClassification Report:\n")
+print(class_report)
+
+# Plot confusion matrix
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
+
+# Plot ROC curve
+fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (area = {roc_auc:0.2f})')
+plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic (ROC) Curve')
+plt.legend(loc="lower right")
+plt.show()
+
+# Random Forest Optimization 
+
+# Manually set hyperparameters for the optimized Random Forest model
+manual_params = {
+    'n_estimators': 200,
+    'max_features': 'sqrt',
+    'max_depth': 20,
+    'min_samples_split': 5,
+    'min_samples_leaf': 2,
+    'bootstrap': True
+}
+
+# Develop the optimized Random Forest model
+optimized_rf_model = RandomForestClassifier(**manual_params, random_state=42)
+optimized_rf_model.fit(X_train, y_train)
+
+# Make predictions for the optimized model
+y_pred_optimized = optimized_rf_model.predict(X_test)
+y_pred_proba_optimized = optimized_rf_model.predict_proba(X_test)[:, 1]
+
+# Evaluate the optimized model
+accuracy_optimized = accuracy_score(y_test, y_pred_optimized)
+precision_optimized = precision_score(y_test, y_pred_optimized)
+recall_optimized = recall_score(y_test, y_pred_optimized)
+f1_optimized = f1_score(y_test, y_pred_optimized)
+class_report_optimized = classification_report(y_test, y_pred_optimized)
+
+# Print the evaluation metrics for the optimized model
+print(f'Optimized Model Accuracy: {accuracy_optimized}')
+print(f'Optimized Model Precision: {precision_optimized}')
+print(f'Optimized Model Recall: {recall_optimized}')
+print(f'Optimized Model F1 Score: {f1_optimized}')
+print("\nOptimized Model Classification Report:\n")
+print(class_report_optimized)
+
+# Plot confusion matrix for the optimized model
+conf_matrix_optimized = confusion_matrix(y_test, y_pred_optimized)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix_optimized, annot=True, fmt='d', cmap='Blues')
+plt.title('Optimized Model Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
+
+# Plot ROC curve for the optimized model
+fpr_optimized, tpr_optimized, _ = roc_curve(y_test, y_pred_proba_optimized)
+roc_auc_optimized = auc(fpr_optimized, tpr_optimized)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr_optimized, tpr_optimized, color='blue', lw=2, label=f'ROC curve (area = {roc_auc_optimized:0.2f})')
+plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Optimized Model Receiver Operating Characteristic (ROC) Curve')
+plt.legend(loc="lower right")
+plt.show()
+
+
+# Neural Network Model
+
+# Build the feedforward neural network using MLPClassifier
+model = MLPClassifier(hidden_layer_sizes=(32, 316), activation='relu', solver='adam', max_iter=100, random_state=42, early_stopping=True, validation_fraction=0.2)
+
+# Train the model
+model.fit(X_train, y_train)
+
+# Evaluate the model
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+conf_matrix = confusion_matrix(y_test, y_pred)
+class_report = classification_report(y_test, y_pred)
+
+print(f"Model Accuracy: {accuracy * 100:.2f}%")
+print("Classification Report:")
+print(class_report)
+
+# Calculate metrics for the optimized model
+accuracy_optimized = accuracy_score(y_test, y_pred_optimized)
+precision_optimized = precision_score(y_test, y_pred_optimized)
+recall_optimized = recall_score(y_test, y_pred_optimized)
+f1_optimized = f1_score(y_test, y_pred_optimized)
+classification_rep_optimized = classification_report(y_test, y_pred_optimized)
+
+# Print the best parameters and the metrics
+print("Best Parameters:", best_params)
+print(f"Optimized Accuracy: {accuracy_optimized}")
+print(f"Optimized Precision: {precision_optimized}")
+print(f"Optimized Recall: {recall_optimized}")
+print(f"Optimized F1 Score: {f1_optimized}")
+print(f"Optimized Classification Report:\n{classification_rep_optimized}")
+
+# Plot confusion matrix
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(6, 6))
+plt.imshow(conf_matrix, interpolation='nearest', cmap=plt.cm.Blues)
+plt.title('Confusion Matrix')
+plt.colorbar()
+tick_marks = np.arange(2)
+plt.xticks(tick_marks, ['Non-Fraud', 'Fraud'], rotation=45)
+plt.yticks(tick_marks, ['Non-Fraud', 'Fraud'])
+plt.xlabel('Predicted Label')
+plt.ylabel('True Label')
+
+print(conf_matrix)
+
+# Plot the loss curve
+plt.figure(figsize=(14, 5))
+
+# Loss plot
+plt.plot(model.loss_curve_)
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.title('Model Loss')
+plt.show()
+
+# Neural Network Optimization
+
+# Define the parameter grid
+param_grid = {
+    'hidden_layer_sizes': [(32,), (64,), (32, 16), (64, 32)],
+    'activation': ['tanh', 'relu'],
+    'solver': ['sgd', 'adam'],
+    'alpha': [0.0001, 0.001, 0.01],
+    'learning_rate': ['constant', 'adaptive'],
+    'max_iter': [200, 300, 400]
+}
+
+# Initialize the MLPClassifier
+mlp = MLPClassifier(max_iter=200, random_state=42, early_stopping=True, validation_fraction=0.2)
+
+# Perform RandomizedSearchCV
+random_search = RandomizedSearchCV(model, param_distributions=param_grid, n_iter=50, cv=3, random_state=42, n_jobs=-1)
+random_search.fit(X_train, y_train)
+
+# Get the best parameters and the best model
+best_params = random_search.best_params_
+best_model = random_search.best_estimator_
+
+# Evaluate the best model
+y_pred_prob_optimized = best_model.predict_proba(X_test)[:, 1]
+y_pred_optimized = best_model.predict(X_test).
+
+# Calculate metrics for the optimized model
+accuracy_optimized = accuracy_score(y_test, y_pred_optimized)
+precision_optimized = precision_score(y_test, y_pred_optimized)
+recall_optimized = recall_score(y_test, y_pred_optimized)
+f1_optimized = f1_score(y_test, y_pred_optimized)
+classification_rep_optimized = classification_report(y_test, y_pred_optimized)
+
+# Plot confusion matrix
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
+
+
+# K-Means Clustering Model
+
+# Standardize the features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Combine the training and test sets for clustering
+X_combined = np.vstack((X_train, X_test))
+y_combined = np.hstack((y_train, y_test))
+X_combined_scaled = scaler.fit_transform(X_combined)
+
+# Apply PCA for K-Means Clustering
+pca = PCA(n_components=2)
+X_combined_pca = pca.fit_transform(X_combined_scaled)
+
+# Apply K-Means Clustering
+kmeans = KMeans(n_clusters=2, n_init=10, random_state=42)
+kmeans.fit(X_combined_pca)
+cluster_labels = kmeans.labels_
+
+# Calculate Adjusted Rand Index
+ari = adjusted_rand_score(y_combined, cluster_labels)
+print(f'Adjusted Rand Index: {ari:.2f}')
+
+# Calculate Silhouette Score
+silhouette_avg = silhouette_score(X_combined_pca, cluster_labels)
+print(f'Silhouette Score: {silhouette_avg:.2f}')
+
+# Plot K-Means Clusters
+plt.figure(figsize=(8, 4))
+plt.scatter(X_combined_pca[:, 0], X_combined_pca[:, 1], c=cluster_labels, cmap='viridis', alpha=0.5)
+plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], s=300, c='red', marker='X')
+plt.title('K-Means Clustering with 2 Clusters')
+plt.xlabel('Principal Component 1')
+plt.ylabel('Principal Component 2')
+plt.show()
+
+# Plot Original Income Labels
+plt.figure(figsize=(8, 4))
+plt.scatter(X_combined_pca[:, 0], X_combined_pca[:, 1], c=y_combined, cmap='coolwarm', alpha=0.5)
+plt.title('Original Income Labels in 2D PCA Space')
+plt.xlabel('Principal Component 1')
+plt.ylabel('Principal Component 2')
+plt.show()
+
+# Using a different method for elbow
+# Apply the transformations
+X_preprocessed = preprocessor.fit_transform(X)
+# Preprocess the data
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(), numerical_cols),
+        ('cat', OneHotEncoder(), categorical_cols)
+    ])
+
+data_preprocessed = preprocessor.fit_transform(data)
+
+# Convert preprocessed data to a DataFrame
+feature_names = numerical_cols + list(preprocessor.named_transformers_['cat'].get_feature_names_out(categorical_cols))
+data_preprocessed_df = pd.DataFrame(data_preprocessed, columns=feature_names)
+
+# Elbow method to find the optimal number of clusters
+inertia = []
+K = range(1, 11)
+for k in K:
+    kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+    kmeans.fit(data_preprocessed_df)
+    inertia.append(kmeans.inertia_)
+
+# Plot the elbow curve
+plt.figure(figsize=(10, 6))
+plt.plot(K, inertia, 'bx-')
+plt.xlabel('Number of clusters')
+plt.ylabel('Inertia')
+plt.title('Elbow Method For Optimal k')
+plt.show()
+
+# K-Means Optimization
+
+# K-Means Clustering Optimization and Visualization
+def perform_kmeans_clustering(X, range_n_clusters):
+    silhouette_scores = []
+    for n_clusters in range_n_clusters:
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+        cluster_labels = kmeans.fit_predict(X)
+        silhouette_avg = silhouette_score(X, cluster_labels)
+        silhouette_scores.append(silhouette_avg)
+        print(f"For n_clusters = {n_clusters}, the silhouette score is {silhouette_avg:.2f}")
+    return silhouette_scores
+
+# Apply PCA for dimensionality reduction (for visualization purposes)
+pca = PCA(n_components=2)
+X_combined_scaled = np.vstack((X_train_scaled, X_test_scaled))
+y_combined = np.hstack((y_train, y_test))
+X_combined_pca = pca.fit_transform(X_combined_scaled)
+
+# Perform K-Means clustering with different numbers of clusters
+range_n_clusters = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+silhouette_scores = perform_kmeans_clustering(X_combined_pca, range_n_clusters)
+
+# Choose the best number of clusters based on the highest silhouette score
+best_n_clusters = range_n_clusters[np.argmax(silhouette_scores)]
+kmeans = KMeans(n_clusters=best_n_clusters, n_init=10, random_state=42)
+cluster_labels = kmeans.fit_predict(X_combined_pca)
+
+# Calculate metrics
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+classification_rep = classification_report(y_test, y_pred)
+
+# Print the metrics
+print(f"Accuracy: {accuracy}")
+print(f"Precision: {precision}")
+print(f"Recall: {recall}")
+print(f"F1 Score: {f1}")
+print(f"Classification Report:\n{classification_rep}")
+
+# Logistic Regression
+
+# Develop the Logistic Regression model
+logreg_model = LogisticRegression(max_iter=1000, random_state=42)
+logreg_model.fit(X_train, y_train)
+
+# Make predictions
+y_pred = logreg_model.predict(X_test)
+y_pred_proba = logreg_model.predict_proba(X_test)[:, 1]
+
+# Evaluate the model
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+class_report = classification_report(y_test, y_pred)
+                            
+# Print the evaluation metrics
+print(f'Accuracy: {accuracy}')
+print(f'Precision: {precision}')
+print(f'Recall: {recall}')
+print(f'F1 Score: {f1}')
+print("\nClassification Report:\n")
+print(class_report)
+
+# Plot confusion matrix
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
+
+# Plot ROC curve
+fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (area = {roc_auc:0.2f})')
+plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic (ROC) Curve')
+plt.legend(loc="lower right")
+plt.show()  
+
+# Print feature importance (first 10 features)
+importance = np.abs(logreg_model.coef_[0])
+feature_names = X.columns
+features_importance = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
+features_importance = features_importance.sort_values(by='Importance', ascending=False).head(10)
+print("\nTop 10 Feature Importances:\n")
+print(features_importance)
+
+# Print and plot feature importance (first 10 features)
+importance = np.abs(logreg_model.coef_[0])
+feature_names = X.columns
+features_importance = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
+features_importance = features_importance.sort_values(by='Importance', ascending=False).head(10)
+
+print("\nTop 10 Feature Importances:\n")
+print(features_importance)
+
+# Plot feature importance
+plt.figure(figsize=(10, 8))
+sns.barplot(x='Importance', y='Feature', data=features_importance, palette='viridis')
+plt.title('Top 10 Feature Importances')
+plt.xlabel('Importance')
+plt.ylabel('Feature')
+plt.show()
+
+# Optimised Logistic Regression
+
+# Logistic regression model with hyperparameter tuning using GridSearchCV
+param_grid = {
+    'C': [0.01, 0.1, 1, 10, 100],
+    'solver': ['liblinear'], 
+}
+
+model = LogisticRegression(max_iter=1000)
+
+grid_search = GridSearchCV(model, param_grid, cv=3, scoring='accuracy', n_jobs=-1)
+grid_search.fit(X_train, y_train)
+
+# Best model from GridSearchCV
+best_model = grid_search.best_estimator_
+
+# Predictions and model evaluation
+y_pred = best_model.predict(X_test)
+y_pred_proba = best_model.predict_proba(X_test)[:, 1]
+
+accuracy = accuracy_score(y_test, y_pred)
+classification_report_text = classification_report(y_test, y_pred)
+conf_matrix = confusion_matrix(y_test, y_pred)
+
+# Print model accuracy, cross-validation results, and classification report
+print(f'Model Accuracy: {accuracy}')
+print('Classification Report:')
+print(classification_report_text)
+print(f'Best Parameters: {grid_search.best_params_}')
+                            
+# Calculate metrics
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+classification_rep = classification_report(y_test, y_pred)
+
+# Print the metrics
+print(f"Accuracy: {accuracy}")
+print(f"Precision: {precision}")
+print(f"Recall: {recall}")
+print(f"F1 Score: {f1}")
+print(f"Classification Report:\n{classification_rep}")
+
+
+# Other Models
+
+ # Define the models
+models = {
+    "Decision Tree": DecisionTreeClassifier(),
+    "Gradient Boost": GradientBoostingClassifier()
+}
+
+# Train and evaluate each model
+for name, model in models.items():
+    model.fit(x_train, y_train)
+    
+    # Make Predictions
+    y_train_pred = model.predict(x_train)
+    y_test_pred = model.predict(x_test)
+    
+    # Training set performance
+    model_train_accuracy = accuracy_score(y_train, y_train_pred)
+    model_train_f1 = f1_score(y_train, y_train_pred, average='weighted')
+    model_train_precision = precision_score(y_train, y_train_pred)
+    model_train_recall = recall_score(y_train, y_train_pred)
+    model_train_rocauc_score = roc_auc_score(y_train, y_train_pred)
+    
+    # Test set performance
+    model_test_accuracy = accuracy_score(y_test, y_test_pred)
+    model_test_f1 = f1_score(y_test, y_test_pred, average='weighted')
+    model_test_precision = precision_score(y_test, y_test_pred)
+    model_test_recall = recall_score(y_test, y_test_pred)
+    model_test_rocauc_score = roc_auc_score(y_test, y_test_pred)
+    
+    print(name)
+    
+    print('Model performance for Training set')
+    print(f" - Accuracy: {model_train_accuracy:.4f}")
+    print(f" - F1 score: {model_train_f1:.4f}")
+    print(f" - Precision: {model_train_precision:.4f}")
+    print(f" - Recall: {model_train_recall:.4f}")
+    print(f" - Roc Auc Score: {model_train_rocauc_score:.4f}")
+    
+    print('-----------------------------')
+    
+    print('Model performance for Test set')
+    print(f" - Accuracy: {model_test_accuracy:.4f}")
+    print(f" - F1 score: {model_test_f1:.4f}")
+    print(f" - Precision: {model_test_precision:.4f}")
+    print(f" - Recall: {model_test_recall:.4f}")
+    print(f" - Roc Auc Score: {model_test_rocauc_score:.4f}")
+    
+    print('='*35)
+    print('\n')  
+
+
+# Confusion Matrix for models
+cm = confusion_matrix(y_test, y_test_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Non-Fraudulent', 'Fraudulent'], yticklabels=['Non-Fraudulent', 'Fraudulent'])
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.title(f'Confusion Matrix for Decision Tree')
+plt.show()   
+
+
+# ROC Curve
+fpr, tpr, _ = roc_curve(y_test, model.predict_proba(x_test)[:, 1])
+roc_auc = auc(fpr, tpr)
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title(f'Receiver Operating Characteristic for Gradient Boost')
+plt.legend(loc="lower right")
+plt.show()   
+
+# Classification Report
+from sklearn.metrics import classification_report
+print(f"Classification Report for Decision Tree:\n")
+print(classification_report(y_test, y_test_pred))
+                            
